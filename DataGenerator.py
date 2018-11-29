@@ -15,7 +15,7 @@ FS = 16000
 FRAMESIZE = 160
 train = 'train.json'
 validation = 'validation.json'
-
+test = 'test.json'
 
 '''
 Важные параметры и зависимости:
@@ -99,7 +99,7 @@ def onlyVoice(sig, time):
     return np.array(clear_sig)
 
 
-def mixGenerate(data_dict, N=5, shuffle=True):
+def mixGenerate(data_dict, N=5, size=16, n = 10, shuffle=True):
     """
     Функция для генерации одной смешанной записи и разметки к ней.
     Входные данные:
@@ -119,30 +119,33 @@ def mixGenerate(data_dict, N=5, shuffle=True):
     print(num)
     json_pathes = [] # массив для json-файлов разметки
     sumSignal = None # суммарный сигнал
+    #j = num
+    cutoff = FRAMESIZE * size * n
+    l0 = 0
     for i in range(num): # получаем num случайных записей в массив pathes
-        l = 0
-        while l < 320:
-            k = np.random.randint(0, len(data_dict[keys[i]])) # разыгрываем номер записи для i-го спикера
-            path = data_dict[keys[i]][k] 
-            if len(data_dict[keys[i]]) == 0: # удаляем спикера, если у него не осталось записей
-                data_dict[keys[i]].pop(keys[i])
-            fs, sig = scipy.io.wavfile.read(path) # считываем сигнал
+        if l0 <= cutoff:
+            while l0 <= cutoff:
+                j = np.random.randint(0, len(keys))
+                #random.shuffle(keys)
+                k = np.random.randint(0, len(data_dict[keys[j]])) # разыгрываем номер записи для i-го спикера
+                path = data_dict[keys[j]][k]
+                del (data_dict[keys[j]])[k]
+                if len(data_dict[keys[j]]) == 0: # удаляем спикера, если у него не осталось записей
+                    data_dict.pop(keys[j])
+                    keys = list(data_dict.keys())
+                fs, sig0 = scipy.io.wavfile.read(path)
+                l0 = len(sig0)
+        if l0 > cutoff:
             if sumSignal is None: # суммируем сигналы
-                l = len(sig)
-                if l >= 320:
-                    sumSignal = sig
+                sumSignal = sig0
             else:
-                l = min(len(sig), len(sumSignal))
-                #if l < 160:
-                #    break
-                #sumSignal = [sum(x) for x in zip(sumSignal[:l], sig[:l])]
-                if l >= 320:
-                    sumSignal = sumSignal[:l] + sig[:l]
-        path_json = path[:path.rfind('.')] + '.json'
-        with open(path_json) as f: # заполняем разметочный файл
-            json_pathes.append(json.load(f))
+                sumSignal = sumSignal[:cutoff+1] + sig0[:cutoff+1]
+            path_json = path[:path.rfind('.')] + '.json'
+            with open(path_json) as f: # заполняем разметочный файл
+                json_pathes.append(json.load(f))
+        l0 = 0
     sumSignal = sumSignal // num
-    return sumSignal, json_pathes
+    return sumSignal, json_pathes, data_dict
 
 
 def notation(sig, json_arr):
@@ -174,17 +177,28 @@ def voiceMarking(data_dict):
 
 
 class DataGenerator(keras.utils.Sequence):
-    def __init__(self, train_json, batch_size=2, n_classes=5, shuffle=True):
+    def __init__(self, train_json, batch_size=1, n_classes=5, nums = 500, shuffle=True):
         self.train_json = train_json
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.n_classes = n_classes
-        self.sig, self.json_arr = mixGenerate(json.load(open(self.train_json)))
-        self.matrix = stft(self.sig)
+        self.nums = nums
+        self.data_dict = json.load(open(self.train_json))
+        #self.shape = (81,)
+        #self.ndim = 3
+        self.sig, self.json_arr, self.data_dict = mixGenerate(self.data_dict, 
+                                              size = self.batch_size,
+                                              n = self.nums,
+                                              shuffle = self.shuffle)
+        self.matrix = stft(self.sig) / np.linalg.norm(stft(self.sig))
         self.notation = notation(self.sig, self.json_arr)
         #print(self.matrix)
         #print(self.notation)
         self.on_epoch_end()
+
+    def __len__(self):
+        #print(np.shape(self.matrix)[0])
+        return int(np.floor((np.shape(self.matrix)[0] / self.batch_size))) - 1
 
     def __getitem__(self, index):
         X = []
@@ -193,15 +207,18 @@ class DataGenerator(keras.utils.Sequence):
         Y.append(self.notation[index * self.batch_size:self.batch_size * (index + 1)])
         #X = self.matrix[index * self.batch_size:self.batch_size * (index + 1)]
         #Y = self.notation[index * self.batch_size:self.batch_size * (index + 1)]
-        return np.array(X / np.abs(X)), keras.utils.to_categorical(Y, num_classes = self.n_classes)#np.array(Y)#keras.utils.to_categorical(Y, num_classes = self.n_classes)
-    
-    def __len__(self):
-        return int(np.floor((np.shape(self.matrix)[0] / self.batch_size)))
+        #print(self.json_arr)
+        #print(self.__len__())
+        #print((np.array(X)).shape)
+        #if np.abs(X) != 0.0:
+        return np.array(X), keras.utils.to_categorical(Y, num_classes = self.n_classes)#np.array(Y)#keras.utils.to_categorical(Y, num_classes = self.n_classes)
     
     def on_epoch_end(self):
-        self.sig, self.json_arr = mixGenerate(json.load(open(self.train_json)),
+        self.sig, self.json_arr, self.data_dict = mixGenerate(self.data_dict, 
+                                              size = self.batch_size,
+                                              n = self.nums,
                                           shuffle = self.shuffle)
-        self.matrix = stft(self.sig)
+        self.matrix = stft(self.sig) / np.linalg.norm(stft(self.sig))
         self.notation = notation(self.sig, self.json_arr)
 
 
@@ -216,9 +233,18 @@ def main():
 
     #print(notation(sig, js))
     #print(len(notation(sig, js)))
-    dg = DataGenerator(train)
-    X, Y = dg.__getitem__(0)
-    print(X.shape, Y.shape)
+    '''
+    for k in range(5):
+        dg = DataGenerator(train)
+        print(len(dg))
+    '''
+    '''
+        l = dg.__len__()
+        for i in range(l+1):
+            X, Y = dg.__getitem__(i)
+            print(X.shape, Y.shape)
+        dg.on_epoch_end()
+    '''
     #print(X, Y)
     #testfile = 'ru_0022.wav'
     #fs, sig = scipy.io.wavfile.read(testfile)

@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """
 Created on Fri Nov 23 19:42:45 2018
@@ -11,6 +12,7 @@ from keras.layers import LSTM, Bidirectional, TimeDistributed, Dense, GlobalMaxP
 from keras.models import Sequential
 from keras import regularizers
 from keras import optimizers
+from keras.callbacks import ModelCheckpoint
 #import keras
 import json
 NUM_NETS = 1
@@ -33,28 +35,28 @@ def main():
                 81, #kernel_regularizer = regularizers.l2(L2), 
                 #recurrent_regularizer = regularizers.l2(L2), 
                 #bias_regularizer = regularizers.l2(L2), 
-                activation = 'tanh', return_sequences = True), input_shape = (2,81)))
+                activation = 'tanh', return_sequences = True), input_shape = (1,81)))
         model.add(Bidirectional(LSTM(
                 81, #kernel_regularizer = regularizers.l2(L2), 
                 #recurrent_regularizer = regularizers.l2(L2), 
                 #bias_regularizer = regularizers.l2(L2), 
-                activation = 'tanh', return_sequences = True)))
+                return_sequences = True)))
         model.add(Bidirectional(LSTM(
-                81, #kernel_regularizer = regularizers.l2(L2), 
-                #recurrent_regularizer = regularizers.l2(L2), 
-                #bias_regularizer = regularizers.l2(L2), 
-                activation = 'tanh', return_sequences = True)))
+                10, kernel_regularizer = regularizers.l2(L2), 
+                recurrent_regularizer = regularizers.l2(L2), 
+                bias_regularizer = regularizers.l2(L2), 
+                return_sequences = True)))
     #model.add(GlobalMaxPooling1D())
     #model.add(MaxPooling1D())
-    #model.add(Flatten())
+    model.add(Flatten())
     model.add(Dense(5, activation = 'softmax'))
     print(model)
+    check = ModelCheckpoint('Euclidean_norm_weights.{epoch:02d}-{val_loss:.2f}.hdf5', period = 50)
     model.compile(loss = 'categorical_crossentropy', 
                   optimizer = optimizers.Adam(), metrics = ['accuracy'])
-    model.fit_generator(generator = dg, epochs = 5, 
-                        validation_data = valid)
-    with open(SAVEDIR + 'model' + '.json', 'w') as fl:
-        json.dump(model.to_json(), fl)
+    model.fit_generator(generator = dg, epochs = 2070, verbose = 2, callbacks = [check],
+                        validation_data = valid, max_queue_size = 1)
+    model.save('mod.hdf5')
     return 0
 
 
