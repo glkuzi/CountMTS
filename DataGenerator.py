@@ -190,7 +190,7 @@ class DataGenerator(keras.utils.Sequence):
     '''
     Генератор для обучения модели.
     '''
-    def __init__(self, train_json, batch_size=1, n_classes=5, nums=500, shuffle=True):
+    def __init__(self, train_json, batch_size=20, n_classes=5, nums=26, shuffle=True):
         '''
         Параметры:
             train_json - string, путь к .json файлу разметки заданной выборки
