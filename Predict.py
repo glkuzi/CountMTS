@@ -12,8 +12,16 @@ from DataGenerator import *
 
 
 def accuracy_test(model_name, test=test):
+    '''
+    Оценка точности предсказанных нейросетью данных.
+    Входные данные:
+        model_name - str, путь к сохраненной модели
+        test - str, путь к тестовой выборке
+    Выходные данные:
+        mean_acc - float, точность
+    '''
     dg_test = DataGenerator(test)
-    Num = 10
+    Num = 10  # число эпох генератора
     model = load_model(model_name)
     acc = []
     for i in range(Num):
@@ -35,6 +43,12 @@ def accuracy_test(model_name, test=test):
 
 
 def predict_single_sample(model_name, test=test):
+    '''
+    Предсказание на одном образце.
+    Входные данные:
+        model_name - str, путь к сохраненной модели
+        test - str, путь к тестовой выборке
+    '''
     sig, json_arr = mixGenerate(json.load(open(test)), duration=5,
                                               shuffle=True)
     matrix = stft(sig)
