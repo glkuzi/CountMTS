@@ -15,7 +15,8 @@ import json
 import keras
 
 FS = 16000
-FRAMESIZE = 160
+FRAMESIZE = 400
+OVERLAP = 0.6
 train = 'train.json'
 validation = 'validation.json'
 test = 'test.json'
@@ -27,11 +28,13 @@ test = 'test.json'
 '''
 
 
-def stft(sig, frameSize=FRAMESIZE, overlapFac=0, window=np.hanning):
+def stft(sig, frameSize=FRAMESIZE, overlapFac=OVERLAP, window=np.hanning):
     hop = int(frameSize - np.floor(overlapFac * frameSize))
     w = np.sqrt(window(frameSize))
     out = np.array([np.fft.rfft(w*sig[i:i+frameSize])
                     for i in range(0, len(sig)-frameSize, hop)])
+    out = np.abs(out)
+    out -= np.mean(out)
     return out
 
 
@@ -94,7 +97,7 @@ def onlyVoice(sig, time):
     return np.array(clear_sig)
 
 
-def mixGenerate(data_dict, N=5, size=16, n=10, shuffle=True):
+def mixGenerate(data_dict, N=5, duration=5, shuffle=True):
     """
     Функция для генерации одной смешанной записи и разметки к ней.
     Входные данные:
@@ -102,8 +105,7 @@ def mixGenerate(data_dict, N=5, size=16, n=10, shuffle=True):
             key - string, speaker_id
             value - list, список всех записей спикера
         N-1 - int, максимальное количество спикеров в mix-е
-        size - int, batch_size
-        n - int, количество batch-ей
+        duration - int, длительность сигнала в секундах
         shuffle - boolean, флаг для перемешивания словаря
     Выходные данные:
         SumSignal - array_like, смешанный сигнал
@@ -114,10 +116,9 @@ def mixGenerate(data_dict, N=5, size=16, n=10, shuffle=True):
     if shuffle:
         random.shuffle(keys)  # перемешиваем ключи для выбора случайных записей
     num = np.random.randint(1, N)  # разыгрываем количество спикеров
-    #print(num)
     json_pathes = []  # массив для json-файлов разметки
     sumSignal = None  # суммарный сигнал
-    cutoff = FRAMESIZE * size * n  # минимальная длина аудиофайла
+    cutoff = FS * duration  # 5 sec
     l0 = 0
     for i in range(num):  # получаем num случайных записей в массив pathes
         if l0 <= cutoff:
@@ -125,10 +126,10 @@ def mixGenerate(data_dict, N=5, size=16, n=10, shuffle=True):
                 j = np.random.randint(0, len(keys))
                 k = np.random.randint(0, len(data_dict[keys[j]]))  # разыгрываем номер записи для i-го спикера
                 path = data_dict[keys[j]][k]
-                del (data_dict[keys[j]])[k]
-                if len(data_dict[keys[j]]) == 0:  # удаляем спикера, если у него не осталось записей
-                    data_dict.pop(keys[j])
-                    keys = list(data_dict.keys())
+                #del (data_dict[keys[j]])[k]
+                #if len(data_dict[keys[j]]) == 0:  # удаляем спикера, если у него не осталось записей
+                #    data_dict.pop(keys[j])
+                #    keys = list(data_dict.keys())
                 fs, sig0 = scipy.io.wavfile.read(path)
                 l0 = len(sig0)
         if l0 > cutoff:
@@ -140,11 +141,11 @@ def mixGenerate(data_dict, N=5, size=16, n=10, shuffle=True):
             with open(path_json) as f:  # заполняем разметочный файл
                 json_pathes.append(json.load(f))
         l0 = 0
-    sumSignal = sumSignal // num
+    sumSignal = sumSignal[:cutoff+1] // max(abs(sumSignal))
     return sumSignal, json_pathes
 
 
-def notation(sig, json_arr):
+def notation(sig, json_arr, overlapFac=OVERLAP):
     '''
     Функция для составления разметки.
     Входные данные:
@@ -154,7 +155,9 @@ def notation(sig, json_arr):
     Выходные данные:
         speakerNumbers - array_like, target
     '''
-    tMax = len(sig) * 100 // FS  # количество отрезков в 10 мс
+    # длина stft массива
+    tMax = int((len(sig) - FRAMESIZE) //
+               (FRAMESIZE - np.floor(FRAMESIZE * OVERLAP))) + 1
     activities = []
     for x in json_arr:
         activities.append(x['activity'])
@@ -190,60 +193,52 @@ class DataGenerator(keras.utils.Sequence):
     '''
     Генератор для обучения модели.
     '''
-    def __init__(self, train_json, batch_size=20, n_classes=5, nums=26, shuffle=True):
+    def __init__(self, train_json, batch_size=32, n_classes=5, duration=5, shuffle=True):
         '''
         Параметры:
             train_json - string, путь к .json файлу разметки заданной выборки
             batch_size - int, batch size
             n_classes - int, количество классов
-            nums - int, количество batch-ей в эпохе, определяет длину искомых записей
+            duration - int, длительность сигнала
         '''
         self.train_json = train_json
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.n_classes = n_classes
-        self.nums = nums
+        self.duration = duration
         self.data_dict = json.load(open(self.train_json))
-        self.sig, self.json_arr = mixGenerate(self.data_dict,
-                                              size = self.batch_size,
-                                              n = self.nums,
-                                              shuffle = self.shuffle)
-        self.matrix = stft(self.sig)
-        self.notation = notation(self.sig, self.json_arr)
+        self.matrix = []
+        self.notation = []
+        for i in range(self.batch_size):
+            buf = mixGenerate(self.data_dict,
+                              duration=self.duration,
+                              shuffle=self.shuffle)
+            self.matrix.append(stft(buf[0]))
+            self.notation.append(notation(buf[0], buf[1]))
         self.on_epoch_end()
 
     def __len__(self):
-        return int(np.floor((np.shape(self.matrix)[0] / self.batch_size))) - 1
+        return self.batch_size
 
     def __getitem__(self, index):
         X = []
+        X.append(self.matrix[index])
         Y = []
-        X.append(self.matrix[index * self.batch_size:self.batch_size * (index + 1)])
-        Y.append(self.notation[index * self.batch_size:self.batch_size * (index + 1)])
-        return np.array(X / np.abs(X)), keras.utils.to_categorical(Y, num_classes = self.n_classes)
-    
+        Y.append(self.notation[index])
+        return np.array(X), keras.utils.to_categorical(Y, num_classes=self.n_classes)
+
     def on_epoch_end(self):
-        self.sig, self.json_arr = mixGenerate(self.data_dict,
-                                              size = self.batch_size,
-                                              n = self.nums,
-                                          shuffle = self.shuffle)
-        self.matrix = stft(self.sig)
-        self.notation = notation(self.sig, self.json_arr)
+        self.matrix = []
+        self.notation = []
+        for i in range(self.batch_size):
+            buf = mixGenerate(self.data_dict,
+                              duration=self.duration,
+                              shuffle=self.shuffle)
+            self.matrix.append(stft(buf[0]))
+            self.notation.append(notation(buf[0], buf[1]))
 
 
 def main():
-    '''
-    for k in range(5):
-        dg = DataGenerator(train)
-        print(len(dg))
-    '''
-    '''
-        l = dg.__len__()
-        for i in range(l+1):
-            X, Y = dg.__getitem__(i)
-            print(X.shape, Y.shape)
-        dg.on_epoch_end()
-    '''
     return 0
 
 
